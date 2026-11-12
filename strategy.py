@@ -6,7 +6,6 @@ La señal solo sirve para la apertura de la vela M1 siguiente. No garantiza resu
 """
 import math
 
-
 def _finite(value):
     try:
         return math.isfinite(float(value))
