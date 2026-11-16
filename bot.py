@@ -1,4 +1,4 @@
-"""Bot OTC M1: presión completa y entrada de reversión al abrir la vela siguiente, expiración de 1 minuto.
+"""Bot OTC M1: presión completa y entrada invertida al abrir la vela siguiente, expiración de 5 minutos.
 
 - Obtiene únicamente velas M1 cerradas desde IQ Option.
 - Telegram solo recibe confirmaciones de órdenes ejecutadas correctamente.
@@ -34,10 +34,10 @@ AUTO_DISCOVER_PAIRS = True
 PAIR_ROTATION_OFFSET = 0
 TF = 60
 COUNT = 200
-EXPIRATION = 1
+EXPIRATION = 5
 # Importe predeterminado: mínimo habitual de IQ Option.
 # Si Railway tiene AMOUNT configurado, esa variable prevalece.
-AMOUNT = float(os.getenv("AMOUNT", "8"))
+AMOUNT = float(os.getenv("AMOUNT", "12"))
 if AMOUNT <= 0:
     raise ValueError("AMOUNT debe ser mayor que 0")
 
@@ -670,7 +670,7 @@ def binary_asset_status(iq, pair):
 
     TURBO es el mercado de opciones binarias que admite expiraciones
     de 1 a 5 minutos en iqoptionapi; por eso un par que no este abierto
-    en TURBO queda bloqueado para analisis y entrada de 1 minuto.
+    en TURBO queda bloqueado para análisis y entrada de 5 minutos.
     """
     try:
         data = iq.get_all_init_v2()
@@ -706,22 +706,22 @@ def binary_asset_status(iq, pair):
             is_open = enabled and not suspended
 
             if is_open:
-                return True, f"{pair} abierto en TURBO | expiracion 1m disponible"
+                return True, f"{pair} abierto en TURBO | expiracion 5m solicitada"
 
             return False, f"{pair} TURBO cerrado/suspendido"
 
-        return False, f"{pair} no aparece en TURBO; 1m bloqueado"
+        return False, f"{pair} no aparece en TURBO; entrada de 5m bloqueada"
 
     except Exception as e:
         logging.exception(
             "No se pudo comprobar TURBO de %s",
             pair,
         )
-        return False, f"error disponibilidad 1m: {type(e).__name__}: {e}"
+        return False, f"error disponibilidad TURBO: {type(e).__name__}: {e}"
 
 
 def wait_binary_asset(iq, pair, attempts=2, delay=0.35):
-    """Comprueba TURBO inmediatamente antes de una entrada de 1 minuto."""
+    """Comprueba TURBO inmediatamente antes de una entrada de 5 minutos."""
     last_reason = "sin respuesta"
 
     for attempt in range(1, attempts + 1):
@@ -748,7 +748,7 @@ def wait_binary_asset(iq, pair, attempts=2, delay=0.35):
 
 
 def check_binary_availability(iq, pair):
-    """Comprueba exclusivamente disponibilidad TURBO para expiracion 1m."""
+    """Comprueba exclusivamente disponibilidad TURBO para expiracion 5m."""
     return binary_asset_status(iq, pair)
 
 
@@ -897,7 +897,7 @@ def execute_binary_order(iq, pair, signal, amount, expiration):
 def main():
     global received_candles, PAIR, PAIRS
 
-    logging.info("MAIN_INICIO | presión completa y reversión en apertura de siguiente M1 | DEMO | importe=%.2f | expiración=%dm", AMOUNT, EXPIRATION)
+    logging.info("MAIN_INICIO | presión completa y entrada invertida en apertura de siguiente M1 | DEMO | importe=%.2f | expiración=%dm", AMOUNT, EXPIRATION)
     start_candles_api()
     iq = connect_retry()
     _ensure_telegram_worker()
@@ -994,8 +994,14 @@ def main():
                     candidates.sort(key=lambda item: (item.get("score", 0), item.get("call_score", 0), item.get("put_score", 0)), reverse=True)
                     chosen = candidates[0]
                     pair = chosen["pair"]
-                    signal = chosen["signal"]
+                    original_signal = chosen["signal"]
+                    # INVERSIÓN: CALL de la estrategia se ejecuta como PUT, y viceversa.
+                    signal = "PUT" if original_signal == "CALL" else "CALL"
                     current_stamp = chosen["current_stamp"]
+                    logging.info(
+                        "ENTRADA_INVERTIDA | par=%s | señal_original=%s | dirección_ejecutada=%s",
+                        pair, original_signal, signal
+                    )
                     with order_lock:
                         # Reservar antes de la llamada para evitar reintentos duplicados
                         # si la respuesta de la API es lenta o ambigua.
@@ -1010,7 +1016,7 @@ def main():
                         submitted_order_ids.add(oid)
                         message = (
                             "🧪 ORDEN ACEPTADA\n"
-                            f"Par: {pair}\nDirección: {signal}\nImporte: {AMOUNT:g}\n"
+                            f"Par: {pair}\nSeñal original: {original_signal}\nDirección ejecutada (invertida): {signal}\nImporte: {AMOUNT:g}\n"
                             f"Expiración: {EXPIRATION} minutos\nID de orden: {oid}\n"
                             f"Presión previa: {chosen.get('pressure', 'N/D')}\n"
                             f"Puntuación de oportunidad: {chosen.get('score', 0)}/100\n"
@@ -1024,7 +1030,7 @@ def main():
                             )
                         )
                         tg(message)
-                        logging.info("MEJOR_SEÑAL_EJECUTADA | par=%s | dirección=%s | score=%s | id=%s", pair, signal, chosen.get("score", 0), oid)
+                        logging.info("MEJOR_SEÑAL_EJECUTADA | par=%s | original=%s | invertida=%s | score=%s | id=%s", pair, original_signal, signal, chosen.get("score", 0), oid)
                     else:
                         logging.warning("ORDEN_NO_CONFIRMADA | par=%s | señal=%s | detalle=%s", pair, signal, detail)
                 else:
